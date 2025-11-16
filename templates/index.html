@@ -93,9 +93,10 @@
 
       const badgeBaseClass = "text-xs px-3 py-1 rounded-full font-semibold border transition disabled:opacity-60";
 
-      let queueItems = [];
+      let queueItems = {};
       let activeJobId = null;
       let pollTimer = null;
+      let elapsedTimer = null;
 
       const cleanupJob = async (jobId) => {
         if (!jobId) return;
@@ -130,10 +131,46 @@
         downloadLink.removeAttribute("href");
       };
 
+      const stopElapsedTimer = () => {
+        if (elapsedTimer) {
+          clearInterval(elapsedTimer);
+          elapsedTimer = null;
+        }
+      };
+
+      const formatElapsed = (ms) => {
+        const seconds = Math.max(0, Math.floor(ms / 1000));
+        return `${seconds}s elapsed`;
+      };
+
+      const updateElapsedDisplay = () => {
+        const now = Date.now();
+        Object.values(queueItems).forEach((entry) => {
+          if (!entry || !entry.startTime || !entry.elapsedEl) return;
+          entry.elapsedEl.textContent = formatElapsed(now - entry.startTime);
+        });
+      };
+
+      const startElapsedTimer = () => {
+        stopElapsedTimer();
+        const entries = Object.values(queueItems);
+        if (!entries.length) return;
+        const now = Date.now();
+        entries.forEach((entry) => {
+          if (!entry) return;
+          entry.startTime = entry.startTime || now;
+          if (entry.elapsedEl) {
+            entry.elapsedEl.textContent = formatElapsed(now - entry.startTime);
+          }
+        });
+        elapsedTimer = setInterval(updateElapsedDisplay, 1000);
+      };
+
       const resetQueue = (files = []) => {
         submitButton.dataset.resetJob = "";
+        stopElapsedTimer();
         queueList.innerHTML = "";
-        queueItems = [];
+        queueItems = {};
         if (!files.length) {
           queueSection.classList.add("hidden");
           queueFooter.classList.add("hidden");
@@ -156,6 +193,7 @@
               <div class="min-w-0 flex-1">
                 <p class="font-medium truncate">${file.name}</p>
                 <p class="text-xs text-gray-500" data-status-text>Queued</p>
+                <p class="text-[11px] text-indigo-500" data-elapsed>0s elapsed</p>
               </div>
             </div>
             <button type="button" data-status-badge class="${badgeBaseClass} ${statusClasses.queued}" disabled>
@@ -163,15 +201,20 @@
             </button>
           `;
           queueList.appendChild(item);
-          queueItems[idx] = item;
+          queueItems[idx] = {
+            element: item,
+            elapsedEl: item.querySelector("[data-elapsed]"),
+            startTime: null
+          };
         });
         setChipState("idle", "Queued");
         clearDownload();
       };
 
       const setItemStatus = (idx, file = {}) => {
-        const item = queueItems[idx];
-        if (!item) return;
+        const entry = queueItems[idx];
+        if (!entry) return;
+        const item = entry.element;
         const status = file.status || "queued";
         const label = statusLabels[status] || statusLabels.queued;
         const badge = item.querySelector("[data-status-badge]");
@@ -194,6 +237,10 @@
         }
         if (textNode) {
           textNode.textContent = label;
+        }
+        if (entry.elapsedEl && entry.startTime && status === "complete") {
+          // Freeze display on completion
+          entry.elapsedEl.textContent = formatElapsed(Date.now() - entry.startTime);
         }
       };
 
@@ -243,6 +290,7 @@
 
       const handleFailure = (message) => {
         stopPolling();
+        stopElapsedTimer();
         setChipState("error", "Error");
         queueSubtitle.textContent = "Something went wrong while proofreading.";
         queueFooter.classList.remove("hidden");
@@ -256,6 +304,7 @@
 
       const finalizeSuccess = (job) => {
         stopPolling();
+        stopElapsedTimer();
         setChipState("complete", "Complete");
         queueSubtitle.textContent = "All files processed successfully.";
         queueFooter.classList.remove("hidden");
@@ -345,6 +394,7 @@
           setChipState("processing", "Processing…");
           queueSubtitle.textContent = "Grok is processing your files.";
           startPolling();
+          startElapsedTimer();
         } catch (error) {
           const message = await extractErrorMessage(error);
           handleFailure(message);
