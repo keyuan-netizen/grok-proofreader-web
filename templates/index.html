@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Grok Proofreader</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+  <div class="max-w-2xl mx-auto p-6">
+    <div class="text-center mb-10">
+      <h1 class="text-4xl font-bold text-indigo-800">Grok Proofreader</h1>
+      <p class="text-gray-600 mt-2">Upload .docx files • Pick a role • Get instant reports</p>
+    </div>
+
+    <form action="/proofread" method="post" enctype="multipart/form-data" class="bg-white p-8 rounded-xl shadow-lg space-y-6">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">Proofreader Role</label>
+        <select name="role" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+          {% for role in roles %}
+          <option value="{{ role }}" {% if role == default_role %}selected{% endif %}>{{ role|capitalize }} Proofreader</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">Upload .docx Files</label>
+        <input type="file" name="files" multiple accept=".docx" required
+               class="w-full p-3 border border-gray-300 rounded-lg file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700">
+      </div>
+
+      <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition">
+        Proofread with Grok
+      </button>
+    </form>
+
+    <p class="text-center text-xs text-gray-500 mt-8">
+      Powered by xAI Grok • Built by @y2keith88
+    </p>
+  </div>
+</body>
+</html>

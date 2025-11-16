@@ -1,0 +1,11 @@
+.env
+__pycache__/
+venv/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.zip
+*.DS_Store
+temp/
+/static/
