@@ -12,7 +12,7 @@
       <p class="text-gray-600 mt-2">Upload .docx files • Pick a role • Get instant reports</p>
     </div>
 
-    <form action="/proofread" method="post" enctype="multipart/form-data" class="bg-white p-8 rounded-xl shadow-lg space-y-6">
+    <form action="/proofread" method="post" enctype="multipart/form-data" class="bg-white p-8 rounded-xl shadow-lg space-y-6" id="proofreader-form">
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-2">Proofreader Role</label>
         <select name="role" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
@@ -28,7 +28,25 @@
                class="w-full p-3 border border-gray-300 rounded-lg file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700">
       </div>
 
-      <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition">
+      <div id="queue-section" class="hidden border border-indigo-100 bg-indigo-50 text-indigo-900 rounded-lg p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="font-semibold">Processing Queue</p>
+            <p id="queue-subtitle" class="text-xs uppercase tracking-wide text-indigo-500">Waiting for files…</p>
+          </div>
+          <span id="queue-status-chip" class="text-xs px-3 py-1 rounded-full border border-slate-200 bg-slate-100 text-slate-700 font-semibold">Idle</span>
+        </div>
+        <ol id="queue-list" class="space-y-2 text-sm"></ol>
+        <div id="queue-footer" class="hidden pt-3 mt-1 border-t border-indigo-100 flex items-center justify-between">
+          <p id="queue-summary" class="text-sm font-medium text-indigo-700"></p>
+          <a id="download-link" class="hidden text-sm font-semibold text-indigo-700 hover:text-indigo-900" href="#" download>
+            Download results
+          </a>
+        </div>
+        <div id="queue-alert" class="hidden text-sm text-rose-700 bg-rose-100 border border-rose-200 rounded-md px-3 py-2"></div>
+      </div>
+
+      <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition" id="submit-btn">
         Proofread with Grok
       </button>
     </form>
@@ -37,5 +55,317 @@
       Powered by xAI Grok • Built by @y2keith88
     </p>
   </div>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const form = document.getElementById("proofreader-form");
+      const fileInput = form.querySelector('input[name="files"]');
+      const submitButton = document.getElementById("submit-btn");
+      const queueSection = document.getElementById("queue-section");
+      const queueList = document.getElementById("queue-list");
+      const queueFooter = document.getElementById("queue-footer");
+      const queueSummary = document.getElementById("queue-summary");
+      const queueSubtitle = document.getElementById("queue-subtitle");
+      const queueStatusChip = document.getElementById("queue-status-chip");
+      const queueAlert = document.getElementById("queue-alert");
+      const downloadLink = document.getElementById("download-link");
+
+      const statusLabels = {
+        queued: "Queued",
+        processing: "Processing",
+        complete: "Completed",
+        error: "Error"
+      };
+
+      const statusClasses = {
+        queued: "bg-amber-100 text-amber-700 border border-amber-200",
+        processing: "bg-blue-100 text-blue-700 border border-blue-200",
+        complete: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+        error: "bg-rose-100 text-rose-700 border border-rose-200"
+      };
+
+      const chipClasses = {
+        idle: "bg-slate-100 text-slate-700 border border-slate-200",
+        uploading: "bg-amber-100 text-amber-700 border border-amber-200",
+        processing: "bg-blue-100 text-blue-700 border border-blue-200",
+        complete: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+        error: "bg-rose-100 text-rose-700 border border-rose-200"
+      };
+
+      const badgeBaseClass = "text-xs px-3 py-1 rounded-full font-semibold border transition disabled:opacity-60";
+
+      let queueItems = [];
+      let activeJobId = null;
+      let pollTimer = null;
+
+      const cleanupJob = async (jobId) => {
+        if (!jobId) return;
+        try {
+          await fetch(`/queue/${jobId}`, { method: "DELETE" });
+        } catch (error) {
+          console.warn("Failed to cleanup job", error);
+        } finally {
+          submitButton.dataset.resetJob = "";
+        }
+      };
+
+      const cleanupJobBeacon = (jobId) => {
+        if (!jobId || !navigator.sendBeacon) return;
+        try {
+          const blob = new Blob([JSON.stringify({ reason: "unload" })], {
+            type: "application/json"
+          });
+          navigator.sendBeacon(`/queue/${jobId}/cleanup`, blob);
+        } catch (error) {
+          console.warn("Cleanup beacon failed", error);
+        }
+      };
+
+      const setChipState = (state, text) => {
+        queueStatusChip.textContent = text;
+        queueStatusChip.className = `text-xs px-3 py-1 rounded-full font-semibold ${chipClasses[state] || chipClasses.idle}`;
+      };
+
+      const clearDownload = () => {
+        downloadLink.classList.add("hidden");
+        downloadLink.removeAttribute("href");
+      };
+
+      const resetQueue = (files = []) => {
+        submitButton.dataset.resetJob = "";
+        queueList.innerHTML = "";
+        queueItems = [];
+        if (!files.length) {
+          queueSection.classList.add("hidden");
+          queueFooter.classList.add("hidden");
+          queueSummary.textContent = "";
+          queueSubtitle.textContent = "Waiting for files…";
+          setChipState("idle", "Idle");
+          clearDownload();
+          return;
+        }
+        queueSection.classList.remove("hidden");
+        queueFooter.classList.add("hidden");
+        queueSummary.textContent = `${files.length} file${files.length !== 1 ? "s" : ""} queued`;
+        queueSubtitle.textContent = "Files are ready to be scheduled";
+        files.forEach((file, idx) => {
+          const item = document.createElement("li");
+          item.className = "flex items-center justify-between gap-3 bg-white rounded-md p-3 shadow-sm border border-indigo-100";
+          item.innerHTML = `
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <span class="w-7 h-7 flex items-center justify-center text-xs font-bold text-white bg-indigo-500 rounded-full">${idx + 1}</span>
+              <div class="min-w-0 flex-1">
+                <p class="font-medium truncate">${file.name}</p>
+                <p class="text-xs text-gray-500" data-status-text>Queued</p>
+              </div>
+            </div>
+            <button type="button" data-status-badge class="${badgeBaseClass} ${statusClasses.queued}" disabled>
+              ${statusLabels.queued}
+            </button>
+          `;
+          queueList.appendChild(item);
+          queueItems[idx] = item;
+        });
+        setChipState("idle", "Queued");
+        clearDownload();
+      };
+
+      const setItemStatus = (idx, file = {}) => {
+        const item = queueItems[idx];
+        if (!item) return;
+        const status = file.status || "queued";
+        const label = statusLabels[status] || statusLabels.queued;
+        const badge = item.querySelector("[data-status-badge]");
+        const textNode = item.querySelector("[data-status-text]");
+        if (badge) {
+          badge.textContent = label;
+          badge.className = `${badgeBaseClass} ${statusClasses[status] || statusClasses.queued}`;
+          const canDownload = status === "complete" && Boolean(file.download_url);
+          if (canDownload) {
+            badge.dataset.downloadUrl = file.download_url;
+            badge.disabled = false;
+            badge.title = "Download this report";
+            badge.classList.add("cursor-pointer", "hover:shadow");
+          } else {
+            delete badge.dataset.downloadUrl;
+            badge.disabled = true;
+            badge.removeAttribute("title");
+            badge.classList.remove("cursor-pointer", "hover:shadow");
+          }
+        }
+        if (textNode) {
+          textNode.textContent = label;
+        }
+      };
+
+      const updateSummaryFromServer = (files = []) => {
+        if (!files.length) {
+          queueSummary.textContent = "";
+          return;
+        }
+        const total = files.length;
+        const completed = files.filter(f => f.status === "complete").length;
+        const failed = files.filter(f => f.status === "error").length;
+        if (failed > 0) {
+          queueSummary.textContent = `${failed} file${failed > 1 ? "s" : ""} encountered errors`;
+        } else if (completed === total) {
+          queueSummary.textContent = "All files complete";
+        } else {
+          queueSummary.textContent = `${completed} of ${total} files complete`;
+        }
+      };
+
+      const applyServerStatuses = (serverFiles = []) => {
+        serverFiles.forEach((file, idx) => {
+          const pointer = typeof file.id === "number" ? file.id : idx;
+          setItemStatus(pointer, file);
+        });
+        updateSummaryFromServer(serverFiles);
+      };
+
+      const stopPolling = () => {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      };
+
+      const extractErrorMessage = async (error) => {
+        if (error instanceof Response) {
+          try {
+            const data = await error.json();
+            return data.detail || data.error || "Request failed";
+          } catch {
+            return error.statusText || "Request failed";
+          }
+        }
+        return error?.message || "Request failed";
+      };
+
+      const handleFailure = (message) => {
+        stopPolling();
+        setChipState("error", "Error");
+        queueSubtitle.textContent = "Something went wrong while proofreading.";
+        queueFooter.classList.remove("hidden");
+        queueAlert.textContent = message;
+        queueAlert.classList.remove("hidden");
+        clearDownload();
+        submitButton.disabled = false;
+        submitButton.textContent = "Try again";
+        submitButton.dataset.resetJob = "";
+      };
+
+      const finalizeSuccess = (job) => {
+        stopPolling();
+        setChipState("complete", "Complete");
+        queueSubtitle.textContent = "All files processed successfully.";
+        queueFooter.classList.remove("hidden");
+        downloadLink.href = `/queue/${job.job_id}/download`;
+        downloadLink.classList.remove("hidden");
+        queueSummary.textContent = "All files complete. Download the ZIP.";
+        submitButton.disabled = false;
+        submitButton.textContent = "Proofread another batch";
+        submitButton.dataset.resetJob = job.job_id;
+      };
+
+      const pollStatus = async () => {
+        if (!activeJobId) return;
+        try {
+          const response = await fetch(`/queue/${activeJobId}`);
+          if (!response.ok) {
+            throw response;
+          }
+          const data = await response.json();
+          applyServerStatuses(data.files || []);
+          queueFooter.classList.remove("hidden");
+          if (data.status === "processing") {
+            setChipState("processing", "Processing…");
+            queueSubtitle.textContent = "Grok is working through your queue.";
+          } else if (data.status === "complete") {
+            finalizeSuccess(data);
+          } else if (data.status === "failed") {
+            handleFailure(data.error || "Proofreading job failed.");
+          }
+        } catch (error) {
+          const message = await extractErrorMessage(error);
+          handleFailure(message);
+        }
+      };
+
+      const startPolling = () => {
+        stopPolling();
+        pollStatus();
+        pollTimer = setInterval(pollStatus, 2000);
+      };
+
+      fileInput.addEventListener("change", () => {
+        queueAlert.classList.add("hidden");
+        activeJobId = null;
+        stopPolling();
+        const files = Array.from(fileInput.files || []);
+        resetQueue(files);
+      });
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (submitButton.dataset.resetJob) {
+          const jobId = submitButton.dataset.resetJob;
+          submitButton.disabled = true;
+          submitButton.textContent = "Clearing previous job…";
+          await cleanupJob(jobId);
+          window.location.reload();
+          return;
+        }
+        queueAlert.classList.add("hidden");
+        const files = Array.from(fileInput.files || []);
+        if (!files.length) {
+          queueSection.classList.remove("hidden");
+          queueSummary.textContent = "Please select at least one .docx file.";
+          setChipState("error", "No files");
+          return;
+        }
+        resetQueue(files);
+        setChipState("uploading", "Submitting…");
+        queueSubtitle.textContent = "Uploading files and preparing queue.";
+        submitButton.disabled = true;
+        submitButton.textContent = "Queueing files…";
+        submitButton.dataset.resetJob = "";
+
+        const formData = new FormData(form);
+        try {
+          const response = await fetch("/proofread", {
+            method: "POST",
+            body: formData
+          });
+          if (!response.ok) {
+            throw response;
+          }
+          const data = await response.json();
+          activeJobId = data.job_id;
+          applyServerStatuses(data.files || []);
+          setChipState("processing", "Processing…");
+          queueSubtitle.textContent = "Grok is processing your files.";
+          startPolling();
+        } catch (error) {
+          const message = await extractErrorMessage(error);
+          handleFailure(message);
+        }
+      });
+
+      queueList.addEventListener("click", (event) => {
+        const badge = event.target.closest("[data-status-badge]");
+        if (!badge) return;
+        const downloadUrl = badge.dataset.downloadUrl;
+        if (!downloadUrl) return;
+        event.preventDefault();
+        window.open(downloadUrl, "_blank");
+      });
+
+      window.addEventListener("beforeunload", () => {
+        const jobId = submitButton.dataset.resetJob || activeJobId;
+        if (!jobId) return;
+        cleanupJobBeacon(jobId);
+      });
+    });
+  </script>
 </body>
 </html>

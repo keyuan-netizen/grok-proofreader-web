@@ -20,3 +20,9 @@ git branch -M main
 git remote add origin https://github.com/keyuan-netizen/grok-proofreader-web.git
 git push -u origin main
 # grok-proofreader-web
+
+## commit changes
+git status                  # optional: review current changes
+git add app.py proofreader.py templates/index.html .gitignore requirements.txt README.MD render.yaml
+git commit -m "Add per-file downloads and queue cleanup"
+git push origin main

@@ -57,6 +57,17 @@ def build_table(doc, corrections):
         row[1].text = c.get("suggested", "")
         row[2].text = c.get("reason", "")
 
+def save_single_report(result: Dict, out_dir: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data = result["api_result"]["data"]
+    doc = Document()
+    doc.add_heading(f"Proofreading: {result['filename']}", 0)
+    doc.add_paragraph(f"Summary: {data.get('summary', '')}")
+    build_table(doc, data.get("corrections", []))
+    report_path = out_dir / f"{Path(result['filename']).stem}_PROOFREAD.docx"
+    doc.save(report_path)
+    return report_path
+
 def save_reports(results: List[Dict], out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
     
@@ -83,9 +94,4 @@ def save_reports(results: List[Dict], out_dir: Path):
     
     # Per-file DOCX
     for r in results:
-        d = r["api_result"]["data"]
-        doc = Document()
-        doc.add_heading(f"Proofreading: {r['filename']}", 0)
-        doc.add_paragraph(f"Summary: {d.get('summary', '')}")
-        build_table(doc, d.get("corrections", []))
-        doc.save(out_dir / f"{Path(r['filename']).stem}_PROOFREAD.docx")
+        save_single_report(r, out_dir)
